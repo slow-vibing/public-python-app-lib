@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Exclude all raw .so files from Git
+*.so
+app/services/*.so
+app/middleware/*.so
+
+# Whitelist tracking of release tarballs
+!dist/*.tar.gz

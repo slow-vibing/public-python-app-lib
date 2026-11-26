@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""
+Platform — Enterprise License Verifier (app-licverify)
+===========================================================
+Client-side inspection tool to verify license status, expiration date, and features.
+SAFE FOR PUBLIC DISTRIBUTION (Contains no signing/master key).
+"""
+import os
+import sys
+import time
+import json
+import base64
+import argparse
+from pathlib import Path
+
+
+def _b64_decode(data: str) -> bytes:
+    padding = "=" * (4 - (len(data) % 4)) if len(data) % 4 != 0 else ""
+    return base64.urlsafe_b64decode((data + padding).encode("utf-8"))
+
+
+def locate_license(file_path: str = "") -> str:
+    if file_path and os.path.isfile(file_path):
+        return open(file_path, "r", encoding="utf-8").read().strip()
+
+    # Check environment variable
+    token = os.getenv("LIB_LICENSE_KEY") or os.getenv("APP_LICENSE_KEY")
+    if token and token.strip():
+        return token.strip()
+
+    # Search standard candidate locations
+    candidates = [
+        Path.cwd() / "license.lic",
+        Path(__file__).resolve().parent.parent / "license.lic",
+        Path("/etc/app/app.lic"),
+    ]
+    for c in candidates:
+        if c.is_file():
+            content = c.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+    return ""
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Platform Enterprise License Verifier (app-licverify)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--file", default="", help="Path to license.lic (default: searches app root or LIB_LICENSE_KEY)")
+    args = parser.parse_args()
+
+    token = locate_license(args.file)
+    if not token:
+        print("[ERROR] No license found. Please supply --file=license.lic or set LIB_LICENSE_KEY environment variable.")
+        sys.exit(1)
+
+    if not token.startswith("LIC-") or "." not in token:
+        print("[ERROR] Malformed license token format.")
+        sys.exit(1)
+
+    raw_data = token[8:]
+    payload_b64, _ = raw_data.split(".", 1)
+
+    try:
+        payload_bytes = _b64_decode(payload_b64)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except Exception as e:
+        print(f"[ERROR] Failed to parse license payload: {e}")
+        sys.exit(1)
+
+    now = int(time.time())
+    exp = payload.get("exp", 0)
+    issued = payload.get("issued_at", 0)
+    days_left = max(0, int((exp - now) / 86400))
+    is_expired = now > exp
+
+    print("\n" + "=" * 70)
+    print("PLATFORM — ENTERPRISE LICENSE STATUS")
+    print("=" * 70)
+    print(f"Client / Organization:   {payload.get('client', 'Unknown')}")
+    print(f"Application Identifier:  {payload.get('app', 'my-app')}")
+    print(f"Issued On:               {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(issued))}")
+    print(f"Expiration Date:         {payload.get('expires_at', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exp)))}")
+    print(f"Days Remaining:          {days_left} day(s)")
+    print(f"Allowed Server IPs:      {', '.join(payload.get('ips', ['*']))}")
+    print(f"Licensed Features:       {', '.join(payload.get('features', ['all']))}")
+    print("-" * 70)
+    if is_expired:
+        print("STATUS:                   ❌ EXPIRED! (Application execution blocked)")
+    else:
+        print("STATUS:                   ✓ ACTIVE & AUTHORIZED")
+    print("=" * 70 + "\n")
+
+
+if __name__ == "__main__":
+    main()
